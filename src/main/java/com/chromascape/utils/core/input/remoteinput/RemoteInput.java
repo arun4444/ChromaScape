@@ -217,6 +217,16 @@ public class RemoteInput implements AutoCloseable {
     }
   }
 
+  /**
+   * Makes the client lose focus, as when the user switches to another window. The next mouse or
+   * keyboard input regains focus automatically.
+   */
+  public synchronized void loseFocus() {
+    if (remoteInput.EIOS_HasFocus(target)) {
+      remoteInput.EIOS_LoseFocus(target);
+    }
+  }
+
   /** Will enable keyboard input if it's currently disabled, necessary for keyboard input. */
   private void setKeyboardInputIfDisabled() {
     if (!remoteInput.EIOS_IsKeyboardInputEnabled(target)) {

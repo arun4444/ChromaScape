@@ -85,7 +85,22 @@ public class WindMouse {
       }
     }
 
+    // Vary each parameter per move so no two movements share identical physics.
+    mouseSpeed *= jitter(0.12);
+    mouseGravity *= jitter(0.12);
+    mouseWind *= jitter(0.12);
+
     windMouse2(start, target, mouseGravity, mouseWind, mouseSpeed, moveMouseImpl);
+  }
+
+  /**
+   * Returns a multiplicative jitter factor drawn from a normal distribution around 1.
+   *
+   * @param stdDev The relative standard deviation, e.g. {@code 0.12} for 12%
+   * @return A factor clamped to [0.7, 1.3]
+   */
+  private double jitter(double stdDev) {
+    return Math.max(0.7, Math.min(1.3, 1 + random.nextGaussian() * stdDev));
   }
 
   /**
@@ -109,10 +124,9 @@ public class WindMouse {
       double speed,
       Consumer<Point> moveMouseImpl) {
 
+    double totalDistance = distance(target, start);
     Point intermediate =
-        (distance(target, start) > 250 && random.nextInt(2) == 1)
-            ? randomPoint(target, start)
-            : null;
+        (totalDistance > 250 && random.nextInt(2) == 1) ? pointNearPath(start, target) : null;
 
     if (intermediate != null) {
       windMouseImpl(
@@ -131,6 +145,27 @@ public class WindMouse {
       start = intermediate; // Continue from intermediate
     }
 
+    // Occasionally overshoot the target slightly and correct, as fast human movements do
+    Point overshoot = shouldOvershoot(totalDistance, speed) ? overshootPoint(start, target) : null;
+    if (overshoot != null) {
+      windMouseImpl(
+          start.x,
+          start.y,
+          overshoot.x,
+          overshoot.y,
+          gravity,
+          wind,
+          speed,
+          random.nextInt(10, 25),
+          moveMouseImpl);
+      // Brief reaction time before the corrective movement
+      sleepPrecise(random.nextInt(30, 120));
+      start = overshoot;
+      // The correction is a short, careful movement
+      speed *= 0.6;
+      wind *= 0.5;
+    }
+
     // Move to final target
     windMouseImpl(
         start.x,
@@ -142,6 +177,64 @@ public class WindMouse {
         speed,
         random.nextInt(10, 25),
         moveMouseImpl);
+  }
+
+  /**
+   * Decides whether a movement overshoots. Only longer movements overshoot, and faster ones do so
+   * more often.
+   *
+   * @param totalDistance The straight-line distance of the whole movement
+   * @param speed The movement speed parameter
+   * @return {@code true} if this movement should overshoot
+   */
+  private boolean shouldOvershoot(double totalDistance, double speed) {
+    if (totalDistance < 150) {
+      return false;
+    }
+    double chance = speed >= 40 ? 0.25 : speed >= 25 ? 0.12 : 0.04;
+    return random.nextDouble() < chance;
+  }
+
+  /**
+   * Returns a point slightly past {@code target} along the direction of travel, with a little
+   * sideways error: 3-8% of the remaining distance, capped at 12 pixels.
+   *
+   * @param from Where the final segment starts
+   * @param target The intended destination
+   * @return The overshoot point
+   */
+  private Point overshootPoint(Point from, Point target) {
+    double dist = distance(from, target);
+    if (dist < 1) {
+      return target;
+    }
+    double ux = (target.x - from.x) / dist;
+    double uy = (target.y - from.y) / dist;
+    double extra = Math.min(12, dist * (0.03 + 0.05 * random.nextDouble()));
+    double side = random.nextGaussian() * 3;
+    return new Point(
+        (int) Math.round(target.x + ux * extra - uy * side),
+        (int) Math.round(target.y + uy * extra + ux * side));
+  }
+
+  /**
+   * Returns a waypoint 55-85% of the way along the straight path, offset sideways by a normal
+   * amount proportional to the distance. A hand's primary movement lands near the path rather than
+   * anywhere in the bounding box of start and target.
+   *
+   * @param start The movement start
+   * @param target The movement end
+   * @return The waypoint
+   */
+  private Point pointNearPath(Point start, Point target) {
+    double dist = distance(start, target);
+    double t = 0.55 + 0.3 * random.nextDouble();
+    double side = Math.max(-0.2, Math.min(0.2, random.nextGaussian() * 0.08)) * dist;
+    double ux = (target.x - start.x) / dist;
+    double uy = (target.y - start.y) / dist;
+    return new Point(
+        (int) Math.round(start.x + (target.x - start.x) * t - uy * side),
+        (int) Math.round(start.y + (target.y - start.y) * t + ux * side));
   }
 
   /**
@@ -228,13 +321,7 @@ public class WindMouse {
         if (onMove != null) onMove.accept(newP);
       }
 
-      int w = random.nextInt((int) (Math.round(100.0 / speed))) * 12;
-      if (w < 10) {
-        w = 10;
-      }
-
-      w = (int) Math.round(w * 0.9);
-      sleepPrecise(w);
+      sleepPrecise(stepDelayMillis(speed));
     }
 
     if ((Math.round(xe) != Math.round(xs)) || (Math.round(ye) != Math.round(ys))) {
@@ -277,32 +364,17 @@ public class WindMouse {
   }
 
   /**
-   * Get a random point between 2 points.
+   * Returns the pause between two path steps. The median scales inversely with speed, roughly
+   * matching the old timing on average (~23ms slow, ~16ms medium, ~9ms fast), but is drawn from a
+   * continuous log-normal distribution. The previous implementation could only produce a few
+   * discrete values, which is an easily recognised timing signature.
    *
-   * @param p1 The first point.
-   * @param p2 The second point.
-   * @return The random point.
+   * @param speed The movement speed parameter
+   * @return The pause in milliseconds, clamped to [6, 70]
    */
-  private Point randomPoint(Point p1, Point p2) {
-    int randomX = (int) randomPointBetween(p1.x, p2.x);
-    int randomY = (int) randomPointBetween(p1.y, p2.y);
-    return new Point(randomX, randomY);
-  }
-
-  /**
-   * Generates a random floating-point value between two bounds.
-   *
-   * @param corner1 The first boundary (e.g., the starting coordinate).
-   * @param corner2 The second boundary (e.g., the target coordinate).
-   * @return A random float value falling between {@code corner1} and {@code corner2}. If both
-   *     bounds are equal, returns that value immediately to avoid processing.
-   */
-  private float randomPointBetween(float corner1, float corner2) {
-    if (corner1 == corner2) {
-      return corner1;
-    }
-    float delta = corner2 - corner1;
-    float offset = random.nextFloat() * delta;
-    return corner1 + offset;
+  private long stepDelayMillis(double speed) {
+    double median = 470.0 / speed;
+    double sample = median * Math.exp(random.nextGaussian() * 0.3);
+    return Math.round(Math.max(6, Math.min(70, sample)));
   }
 }

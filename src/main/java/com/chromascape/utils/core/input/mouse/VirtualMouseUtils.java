@@ -192,9 +192,41 @@ public class VirtualMouseUtils {
     prepareInput();
     synchronized (inputLock) {
       input.holdMouse(button);
-      BaseScript.waitRandomMillis(50, 80);
+      BaseScript.waitMillis(clickHoldMillis());
       input.releaseMouse(button);
     }
+  }
+
+  /**
+   * Returns how long a click holds the button down. Human press durations are right-skewed: most
+   * fall around 70-110ms with an occasional longer press, so this draws from a log-normal
+   * distribution (median ~85ms) rather than a narrow uniform range.
+   *
+   * @return The hold duration in milliseconds, clamped to [45, 220]
+   */
+  private long clickHoldMillis() {
+    double sample = 85 * Math.exp(random.nextGaussian() * 0.3);
+    return Math.round(Math.max(45, Math.min(220, sample)));
+  }
+
+  /**
+   * Makes the client lose focus, as when the user switches to another window. RemoteInput restores
+   * focus automatically on the next input. Use after moving the cursor off the client.
+   */
+  public void releaseFocus() {
+    synchronized (inputLock) {
+      input.loseFocus();
+    }
+  }
+
+  /**
+   * Returns the virtual cursor's current position in client coordinates.
+   *
+   * @return A copy of the current position, or {@code null} if not yet known
+   */
+  public Point getCurrentPosition() {
+    Point p = currentPosition;
+    return p == null ? null : new Point(p);
   }
 
   /** Left clicks at the current mouse position. */
