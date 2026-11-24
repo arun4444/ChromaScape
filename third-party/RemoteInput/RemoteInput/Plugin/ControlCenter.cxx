@@ -8,6 +8,41 @@
 #include "ReflectionHook.hxx"
 #include "RemoteVM.hxx"
 
+#if defined(__linux__)
+#include <fstream>
+#include <sstream>
+#include <string>
+#endif
+
+/// Returns the PID that `pid` sees for itself via getpid(), used to name shared IPC objects.
+///
+/// When the target runs inside a PID namespace (e.g. a Flatpak/bwrap sandbox such as the Bolt
+/// launcher), the injected plugin names its shared memory and semaphores after its namespaced PID,
+/// while the controller only knows the host PID. The last field of `NSpid:` in /proc/<pid>/status
+/// is the PID in the process's innermost namespace. Without a namespace it equals `pid`.
+static std::int32_t ipc_pid(std::int32_t pid) noexcept
+{
+    #if defined(__linux__)
+    std::ifstream status("/proc/" + std::to_string(pid) + "/status");
+    std::string line;
+    while (std::getline(status, line))
+    {
+        if (line.rfind("NSpid:", 0) == 0)
+        {
+            std::istringstream fields(line.substr(6));
+            std::int32_t innermost = pid;
+            std::int32_t value = 0;
+            while (fields >> value)
+            {
+                innermost = value;
+            }
+            return innermost > 0 ? innermost : pid;
+        }
+    }
+    #endif
+    return pid;
+}
+
 auto create_command_processor = [](auto processor) -> std::thread {
     std::thread thread = std::thread([processor]{
         #if defined(_WIN32) || defined(_WIN64)
@@ -943,9 +978,9 @@ bool ControlCenter::init_maps() noexcept
 {
     char mapName[256] = {0};
     #if defined(_WIN32) || defined(_WIN64)
-    snprintf(mapName, sizeof(mapName) - 1, "Local\\RemoteInput_%d", pid);
+    snprintf(mapName, sizeof(mapName) - 1, "Local\\RemoteInput_%d", ipc_pid(pid));
     #else
-    snprintf(mapName, sizeof(mapName) - 1, "RemoteInput_%d", pid);
+    snprintf(mapName, sizeof(mapName) - 1, "RemoteInput_%d", ipc_pid(pid));
     #endif
 
     if (is_controller)
@@ -997,18 +1032,18 @@ bool ControlCenter::init_signals() noexcept
     #if defined(_WIN32) || defined(_WIN64)
     char readName[256] = {0};
     char writeName[256] = {0};
-    snprintf(readName, sizeof(readName) - 1, "Local\\RemoteInput_ControlCenter_EventRead_%d", pid);
-    snprintf(writeName, sizeof(writeName) - 1, "Local\\RemoteInput_ControlCenter_EventWrite_%d", pid);
+    snprintf(readName, sizeof(readName) - 1, "Local\\RemoteInput_ControlCenter_EventRead_%d", ipc_pid(pid));
+    snprintf(writeName, sizeof(writeName) - 1, "Local\\RemoteInput_ControlCenter_EventWrite_%d", ipc_pid(pid));
     #elif defined(__linux__)
     char readName[256] = {0};
     char writeName[256] = {0};
-    snprintf(readName, sizeof(readName) - 1, "/RemoteInput_ControlCenter_EventRead_%d", pid);
-    snprintf(writeName, sizeof(writeName) - 1, "/RemoteInput_ControlCenter_EventWrite_%d", pid);
+    snprintf(readName, sizeof(readName) - 1, "/RemoteInput_ControlCenter_EventRead_%d", ipc_pid(pid));
+    snprintf(writeName, sizeof(writeName) - 1, "/RemoteInput_ControlCenter_EventWrite_%d", ipc_pid(pid));
     #else
     char readName[31] = {0};  //PSHMNAMELEN from <sys/posix_shm.h>
     char writeName[31] = {0};
-    snprintf(readName, sizeof(readName) - 1, "/RI_EventRead_%d", pid);
-    snprintf(writeName, sizeof(writeName) - 1, "/RI_EventWrite_%d", pid);
+    snprintf(readName, sizeof(readName) - 1, "/RI_EventRead_%d", ipc_pid(pid));
+    snprintf(writeName, sizeof(writeName) - 1, "/RI_EventWrite_%d", ipc_pid(pid));
     #endif
 
     command_signal = std::make_unique<Signal>(readName);
@@ -1020,13 +1055,13 @@ bool ControlCenter::init_wait() noexcept
 {
     #if defined(_WIN32) || defined(_WIN64)
     char signalName[256] = {0};
-    snprintf(signalName, sizeof(signalName) - 1, "Local\\RemoteInput_ControlCenter_SyncSignal_%d", pid);
+    snprintf(signalName, sizeof(signalName) - 1, "Local\\RemoteInput_ControlCenter_SyncSignal_%d", ipc_pid(pid));
     #elif defined(__linux__)
     char signalName[256] = {0};
-    snprintf(signalName, sizeof(signalName) - 1, "/RemoteInput_ControlCenter_SyncSignal_%d", pid);
+    snprintf(signalName, sizeof(signalName) - 1, "/RemoteInput_ControlCenter_SyncSignal_%d", ipc_pid(pid));
     #else
     char signalName[31] = {0};  //PSHMNAMELEN from <sys/posix_shm.h>
-    snprintf(signalName, sizeof(signalName) - 1, "/RI_SyncSignal_%d", pid);
+    snprintf(signalName, sizeof(signalName) - 1, "/RI_SyncSignal_%d", ipc_pid(pid));
     #endif
 
     sync_signal = std::make_unique<Event>(signalName);
@@ -1041,27 +1076,27 @@ void ControlCenter::kill_zombie_process(std::int32_t pid) noexcept
     char buffer[256] = {0};
 
     //Kill Memory Maps
-    snprintf(buffer, sizeof(buffer) - 1, "RemoteInput_%d", pid);
+    snprintf(buffer, sizeof(buffer) - 1, "RemoteInput_%d", ipc_pid(pid));
     shm_unlink(buffer);
 
     //Kill Signals
-    snprintf(buffer, sizeof(buffer) - 1, "/RemoteInput_ControlCenter_EventRead_%d", pid);
+    snprintf(buffer, sizeof(buffer) - 1, "/RemoteInput_ControlCenter_EventRead_%d", ipc_pid(pid));
     sem_unlink(buffer);
 
-    snprintf(buffer, sizeof(buffer) - 1, "/RemoteInput_ControlCenter_EventWrite_%d", pid);
+    snprintf(buffer, sizeof(buffer) - 1, "/RemoteInput_ControlCenter_EventWrite_%d", ipc_pid(pid));
     sem_unlink(buffer);
     #else
     char buffer[256] = {0};
 
     //Kill Memory Maps
-    snprintf(buffer, sizeof(buffer) - 1, "RemoteInput_%d", pid);
+    snprintf(buffer, sizeof(buffer) - 1, "RemoteInput_%d", ipc_pid(pid));
     shm_unlink(buffer);
 
     //Kill Signals
-    snprintf(buffer, sizeof(buffer) - 1, "/RI_EventRead_%d", pid);
+    snprintf(buffer, sizeof(buffer) - 1, "/RI_EventRead_%d", ipc_pid(pid));
     sem_unlink(buffer);
 
-    snprintf(buffer, sizeof(buffer) - 1, "/RI_EventWrite_%d", pid);
+    snprintf(buffer, sizeof(buffer) - 1, "/RI_EventWrite_%d", ipc_pid(pid));
     sem_unlink(buffer);
     #endif
 }
@@ -1168,13 +1203,13 @@ void ControlCenter::signal_sync(std::int32_t pid) noexcept
 {
     #if defined(_WIN32) || defined(_WIN64)
     char signalName[256] = {0};
-    snprintf(signalName, sizeof(signalName) - 1, "Local\\RemoteInput_ControlCenter_SyncSignal_%d", pid);
+    snprintf(signalName, sizeof(signalName) - 1, "Local\\RemoteInput_ControlCenter_SyncSignal_%d", ipc_pid(pid));
     #elif defined(__linux__)
     char signalName[256] = {0};
-    snprintf(signalName, sizeof(signalName) - 1, "/RemoteInput_ControlCenter_SyncSignal_%d", pid);
+    snprintf(signalName, sizeof(signalName) - 1, "/RemoteInput_ControlCenter_SyncSignal_%d", ipc_pid(pid));
     #else
     char signalName[31] = {0};  //PSHMNAMELEN from <sys/posix_shm.h>
-    snprintf(signalName, sizeof(signalName) - 1, "/RI_SyncSignal_%d", pid);
+    snprintf(signalName, sizeof(signalName) - 1, "/RI_SyncSignal_%d", ipc_pid(pid));
     #endif
 
     auto sync_signal = std::make_unique<Event>(signalName);
@@ -1189,13 +1224,13 @@ void ControlCenter::wait_for_sync(std::int32_t pid) noexcept
 {
     #if defined(_WIN32) || defined(_WIN64)
     char signalName[256] = {0};
-    snprintf(signalName, sizeof(signalName) - 1, "Local\\RemoteInput_ControlCenter_SyncSignal_%d", pid);
+    snprintf(signalName, sizeof(signalName) - 1, "Local\\RemoteInput_ControlCenter_SyncSignal_%d", ipc_pid(pid));
     #elif defined(__linux__)
     char signalName[256] = {0};
-    snprintf(signalName, sizeof(signalName) - 1, "/RemoteInput_ControlCenter_SyncSignal_%d", pid);
+    snprintf(signalName, sizeof(signalName) - 1, "/RemoteInput_ControlCenter_SyncSignal_%d", ipc_pid(pid));
     #else
     char signalName[31] = {0};  //PSHMNAMELEN from <sys/posix_shm.h>
-    snprintf(signalName, sizeof(signalName) - 1, "/RI_SyncSignal_%d", pid);
+    snprintf(signalName, sizeof(signalName) - 1, "/RI_SyncSignal_%d", ipc_pid(pid));
     #endif
 
     auto sync_signal = std::make_unique<Event>(signalName);
@@ -1216,9 +1251,9 @@ bool ControlCenter::controller_exists(std::int32_t pid) noexcept
 
     char mapName[256] = {0};
     #if defined(_WIN32) || defined(_WIN64)
-    snprintf(mapName, sizeof(mapName) - 1, "Local\\RemoteInput_%d", pid);
+    snprintf(mapName, sizeof(mapName) - 1, "Local\\RemoteInput_%d", ipc_pid(pid));
     #else
-    snprintf(mapName, sizeof(mapName) - 1, "RemoteInput_%d", pid);
+    snprintf(mapName, sizeof(mapName) - 1, "RemoteInput_%d", ipc_pid(pid));
     #endif
 
     return MemoryMapStream<ImageData>(mapName, 0, MemoryMapStream<ImageData>::open_mode::read).is_mapped();
@@ -1234,9 +1269,9 @@ bool ControlCenter::controller_is_paired(std::int32_t pid, bool* exists) noexcep
 
     char mapName[256] = {0};
     #if defined(_WIN32) || defined(_WIN64)
-    snprintf(mapName, sizeof(mapName) - 1, "Local\\RemoteInput_%d", pid);
+    snprintf(mapName, sizeof(mapName) - 1, "Local\\RemoteInput_%d", ipc_pid(pid));
     #else
-    snprintf(mapName, sizeof(mapName) - 1, "RemoteInput_%d", pid);
+    snprintf(mapName, sizeof(mapName) - 1, "RemoteInput_%d", ipc_pid(pid));
     #endif
 
     *exists = false;

@@ -22,7 +22,19 @@ public class RemoteInput implements AutoCloseable {
 
   private static final String COMPILED_BINARY_FILENAME = "libRemoteInput" + getExtension();
 
+  /** How many times to try pairing with the target before giving up. */
+  private static final int PAIR_ATTEMPTS = 20;
+
+  /** Delay between pairing attempts; 20 attempts gives the target up to ~5 seconds to start. */
+  private static final long PAIR_RETRY_DELAY_MS = 250;
+
   private final int pid;
+
+  /**
+   * The client's Java2D UI scale. The canvas is drawn at this multiple of its logical size, so
+   * captured frames are reduced by it to match the coordinates input events use.
+   */
+  private final int uiScale;
 
   /** JNA needs to load the binary as an interface, the interface acts as the exported headers. */
   private final RemoteInputInterface remoteInput;
@@ -40,7 +52,21 @@ public class RemoteInput implements AutoCloseable {
    * @param pid The process ID of the target Java application
    */
   public RemoteInput(int pid) {
+    this(pid, 1);
+  }
+
+  /**
+   * Constructs the RemoteInput class for a client drawn at a UI scale.
+   *
+   * @param pid The process ID of the target Java application
+   * @param uiScale The integer Java2D UI scale the client renders at; {@code 1} for none
+   */
+  public RemoteInput(int pid, int uiScale) {
+    if (uiScale < 1) {
+      throw new IllegalArgumentException("uiScale must be >= 1, got " + uiScale);
+    }
     this.pid = pid;
+    this.uiScale = uiScale;
     this.remoteInput = loadRemoteInput();
     initialise();
   }
@@ -115,10 +141,21 @@ public class RemoteInput implements AutoCloseable {
    * @see #target <- The returned pointer
    */
   private void pairClient() {
-    target = remoteInput.EIOS_RequestTarget(String.valueOf(pid));
-    if (target == null) {
-      throw new RuntimeException("Target Not Found with pid: " + pid);
+    // The injected half of RI sets up its shared memory asynchronously, so pairing straight after a
+    // fresh injection can race it. Retry briefly before giving up.
+    for (int attempt = 1; attempt <= PAIR_ATTEMPTS; attempt++) {
+      target = remoteInput.EIOS_RequestTarget(String.valueOf(pid));
+      if (target != null) {
+        return;
+      }
+      try {
+        Thread.sleep(PAIR_RETRY_DELAY_MS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        break;
+      }
     }
+    throw new RuntimeException("Target Not Found with pid: " + pid);
   }
 
   /**
@@ -208,10 +245,31 @@ public class RemoteInput implements AutoCloseable {
    * @return A rectangle defining the origin and bounds of the target application
    */
   public synchronized Rectangle getTargetDimensions() {
+    Rectangle captured = getCapturedDimensions();
+    return new Rectangle(0, 0, captured.width / uiScale, captured.height / uiScale);
+  }
+
+  /**
+   * Returns the dimensions of the frame in the image buffer, before any UI-scale reduction. With a
+   * UI scale of {@code n} this is {@code n} times {@link #getTargetDimensions()}.
+   *
+   * @return A rectangle defining the size of the captured frame
+   */
+  public synchronized Rectangle getCapturedDimensions() {
     IntByReference x = new IntByReference();
     IntByReference y = new IntByReference();
     remoteInput.EIOS_GetTargetDimensions(target, x, y);
     return new Rectangle(0, 0, x.getValue(), y.getValue());
+  }
+
+  /**
+   * Returns the integer factor captured frames are reduced by so that image coordinates match the
+   * client's logical coordinates, which is what input events use.
+   *
+   * @return The UI scale factor, {@code 1} when the client is not scaled
+   */
+  public int getUiScale() {
+    return uiScale;
   }
 
   /**

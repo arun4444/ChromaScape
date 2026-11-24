@@ -68,3 +68,9 @@ injector_shellcode_size:
 	// distance from injector_shellcode to current.
 	.int	. - injector_shellcode
 #endif
+
+/* Mark the stack non-executable. Without this note the linker flags the whole shared object as
+ * needing an executable stack, which glibc >= 2.41 refuses to dlopen (e.g. inside Flatpak). */
+#if defined(__linux__) && defined(__ELF__)
+	.section .note.GNU-stack,"",%progbits
+#endif

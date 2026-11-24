@@ -44,7 +44,7 @@ public class ScreenManager {
    * @return A {@link BufferedImage} of the client's screen
    */
   public static synchronized BufferedImage captureWindow() {
-    Rectangle dims = remoteInput.getTargetDimensions();
+    Rectangle dims = remoteInput.getCapturedDimensions();
     int width = dims.width;
     int height = dims.height;
 
@@ -60,7 +60,36 @@ public class ScreenManager {
     int bufferSize = width * height * 4;
     byte[] data = currentScreenBuffer.getByteArray(0, bufferSize);
 
+    int scale = remoteInput.getUiScale();
+    if (scale > 1) {
+      return downscale(data, width, height, scale);
+    }
     return createBufferedImage(data, width, height);
+  }
+
+  /**
+   * Reduces a frame drawn at an integer UI scale back to the client's logical size. Java2D draws
+   * each logical pixel as a {@code scale x scale} block of one colour, so taking the top-left pixel
+   * of every block restores the original frame exactly, with no smoothing.
+   *
+   * @param pixels The captured BGRA frame
+   * @param width The captured frame width
+   * @param height The captured frame height
+   * @param scale The integer UI scale
+   * @return The frame at logical size
+   */
+  private static BufferedImage downscale(byte[] pixels, int width, int height, int scale) {
+    int outWidth = width / scale;
+    int outHeight = height / scale;
+    byte[] out = new byte[outWidth * outHeight * 4];
+    for (int y = 0; y < outHeight; y++) {
+      int srcRow = y * scale * width * 4;
+      int dstRow = y * outWidth * 4;
+      for (int x = 0; x < outWidth; x++) {
+        System.arraycopy(pixels, srcRow + x * scale * 4, out, dstRow + x * 4, 4);
+      }
+    }
+    return createBufferedImage(out, outWidth, outHeight);
   }
 
   /**

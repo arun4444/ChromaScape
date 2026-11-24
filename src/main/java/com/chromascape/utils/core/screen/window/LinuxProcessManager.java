@@ -20,6 +20,7 @@ public class LinuxProcessManager implements ProcessManager {
 
   private static final Logger logger = LogManager.getLogger(LinuxProcessManager.class);
   private static final String RUNELITE_MAIN_CLASS = "net.runelite.client.RuneLite";
+  private static final String UI_SCALE_FLAG = "-Dsun.java2d.uiScale=";
 
   /**
    * Returns the Process ID of RuneLite. Scans {@code /proc/[pid]/cmdline} entries for the RuneLite
@@ -52,5 +53,27 @@ public class LinuxProcessManager implements ProcessManager {
       logger.error("Failed to iterate /proc: {}", e.getMessage());
     }
     return -1; // May be -1 if not found
+  }
+
+  /**
+   * Reads {@code -Dsun.java2d.uiScale=<n>} from the target's {@code /proc/[pid]/cmdline}. Launchers
+   * such as Bolt pass the RuneLite launcher's "scale" setting this way.
+   *
+   * @param pid The process ID of the target
+   * @return The UI scale, or {@code 1.0} if the flag is absent or unreadable
+   */
+  @Override
+  public double getUiScale(int pid) {
+    try {
+      byte[] bytes = Files.readAllBytes(Paths.get("/proc", String.valueOf(pid), "cmdline"));
+      for (String arg : new String(bytes, StandardCharsets.UTF_8).split("\0")) {
+        if (arg.startsWith(UI_SCALE_FLAG)) {
+          return Double.parseDouble(arg.substring(UI_SCALE_FLAG.length()));
+        }
+      }
+    } catch (IOException | NumberFormatException e) {
+      logger.warn("Could not read UI scale for pid {}: {}", pid, e.getMessage());
+    }
+    return 1.0;
   }
 }

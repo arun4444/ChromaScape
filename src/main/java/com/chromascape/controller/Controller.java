@@ -3,6 +3,7 @@ package com.chromascape.controller;
 import com.chromascape.utils.core.input.keyboard.VirtualKeyboardUtils;
 import com.chromascape.utils.core.input.mouse.VirtualMouseUtils;
 import com.chromascape.utils.core.input.remoteinput.RemoteInput;
+import com.chromascape.utils.core.screen.window.ProcessManager;
 import com.chromascape.utils.core.screen.window.ProcessManagerFactory;
 import com.chromascape.utils.core.screen.window.ScreenManager;
 import com.chromascape.utils.domain.ocr.Ocr;
@@ -37,6 +38,49 @@ public class Controller {
   private Walker walker;
   private static final Logger logger = LogManager.getLogger(Controller.class);
 
+  /**
+   * System property that overrides the detected client UI scale, e.g. {@code
+   * -Dchromascape.uiScale=2}.
+   */
+  private static final String UI_SCALE_PROPERTY = "chromascape.uiScale";
+
+  /**
+   * Determines the integer factor captured frames must be reduced by. Uses the {@value
+   * #UI_SCALE_PROPERTY} system property if set, otherwise the scale the client was launched with.
+   * Fractional scales cannot be reversed exactly, so they fall back to {@code 1} with a warning.
+   *
+   * @param processManager The OS process manager used to inspect the client
+   * @param pid The client's process ID
+   * @return The integer UI scale, at least {@code 1}
+   */
+  private static int resolveUiScale(ProcessManager processManager, int pid) {
+    String override = System.getProperty(UI_SCALE_PROPERTY);
+    double scale;
+    if (override != null) {
+      try {
+        scale = Double.parseDouble(override);
+      } catch (NumberFormatException e) {
+        logger.warn("Ignoring invalid {}={}", UI_SCALE_PROPERTY, override);
+        scale = processManager.getUiScale(pid);
+      }
+    } else {
+      scale = processManager.getUiScale(pid);
+    }
+
+    long rounded = Math.round(scale);
+    if (rounded < 1 || Math.abs(scale - rounded) > 1e-6) {
+      logger.warn(
+          "Client UI scale {} is not a whole number; captures will not match input coordinates."
+              + " Set the RuneLite launcher scale to a whole number such as 1, 2 or 3.",
+          scale);
+      return 1;
+    }
+    if (rounded > 1) {
+      logger.info("Client UI scale is {}x; captures will be reduced to logical size", rounded);
+    }
+    return (int) rounded;
+  }
+
   /** Constructs a new Controller instance. */
   public Controller() {
     this.state = ControllerState.STOPPED;
@@ -57,7 +101,9 @@ public class Controller {
 
     logger.info("Setting up Remote Input Library...");
     // Obtain process ID of the target window to initialize input injection
-    remoteInput = new RemoteInput(ProcessManagerFactory.getProcessManager().getPid());
+    ProcessManager processManager = ProcessManagerFactory.getProcessManager();
+    int pid = processManager.getPid();
+    remoteInput = new RemoteInput(pid, resolveUiScale(processManager, pid));
     // Give screen manager access to Remote Input to grab screen buffer
     ScreenManager.setRemoteInput(remoteInput);
 
