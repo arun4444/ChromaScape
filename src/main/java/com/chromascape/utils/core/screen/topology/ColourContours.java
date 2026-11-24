@@ -44,7 +44,13 @@ public class ColourContours {
     ViewportManager.getInstance().updateState(mask);
     MatVector contours = extractContours(mask);
     mask.release();
-    return createChromaObjects(contours);
+    try {
+      return createChromaObjects(contours);
+    } finally {
+      // The ChromaObjs hold their own copies, so the vector can be freed now rather than
+      // whenever the garbage collector gets to it.
+      contours.close();
+    }
   }
 
   /**
@@ -168,7 +174,13 @@ public class ColourContours {
 
   /**
    * Creates a list of ChromaObj objects from the given contours. Each ChromaObj contains the
-   * contour index, the contour Mat itself, and its bounding rectangle as a Java AWT Rectangle.
+   * contour index, its own copy of the contour Mat, and its bounding rectangle as a Java AWT
+   * Rectangle.
+   *
+   * <p>{@code MatVector.get} returns a reference into the vector's own storage, which is freed
+   * with the vector. Each contour is therefore cloned, so a ChromaObj stays valid, and can be
+   * released, independently of the vector's lifetime. Holding the references directly caused
+   * use-after-free crashes in {@code Mat.release()} once the vector was garbage collected.
    *
    * @param contours MatVector containing contours detected in the image
    * @return list of ChromaObj objects representing each contour with bounding box
@@ -176,7 +188,7 @@ public class ColourContours {
   public static List<ChromaObj> createChromaObjects(MatVector contours) {
     List<ChromaObj> chromaObjects = new ArrayList<>();
     for (int i = 0; i < contours.size(); i++) {
-      Mat contour = contours.get(i);
+      Mat contour = contours.get(i).clone();
       Rect rect = boundingRect(contour);
       Rectangle contourBounds = new Rectangle(rect.x(), rect.y(), rect.width(), rect.height());
       chromaObjects.add(new ChromaObj(i, contour, contourBounds));
