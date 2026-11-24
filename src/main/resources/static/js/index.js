@@ -45,6 +45,7 @@ async function initializeUI() {
 
     try {
         await fetchAndRenderScripts();
+        await refreshScriptStatus();
     } catch (error) {
         console.error("Failed to initialize scripts:", error);
     }
@@ -121,23 +122,101 @@ function renderScriptList(scripts) {
         title.textContent = script;
 
         listItem.appendChild(title);
+        listItem.dataset.script = script;
         listGroup.appendChild(listItem);
 
         listItem.addEventListener("click", () => {
             if (isStarted) return; // double check logic if pointer-events fails or via keyboard
-
-            if (previouslySelectedElement) {
-                previouslySelectedElement.classList.remove("bg-light");
-                previouslySelectedElement.classList.add("bg-med");
-            }
-
-            listItem.classList.remove("bg-med");
-            listItem.classList.add("bg-light");
-
-            selectedScriptName = script;
-            previouslySelectedElement = listItem;
+            selectScript(script);
         });
     });
+}
+
+/** localStorage key that keeps the selection across the reload that follows START. */
+const SELECTED_SCRIPT_KEY = "chromascape.selectedScript";
+
+/**
+ * Marks a script as selected: highlights it, remembers it and updates the status line.
+ *
+ * @param {string|null} script - Script file name as listed by /api/scripts
+ */
+function selectScript(script) {
+    if (previouslySelectedElement) {
+        previouslySelectedElement.classList.remove("active");
+    }
+    const item = script
+        ? document.querySelector(`#script-list li[data-script="${CSS.escape(script)}"]`)
+        : null;
+    if (item) {
+        item.classList.add("active");
+    }
+    previouslySelectedElement = item;
+    selectedScriptName = item ? script : null;
+
+    try {
+        if (selectedScriptName) {
+            localStorage.setItem(SELECTED_SCRIPT_KEY, selectedScriptName);
+        }
+    } catch (e) {
+        // Storage unavailable (private window etc.); selection still works for this page view
+    }
+    renderScriptStatus(null);
+}
+
+/**
+ * Shows what is running, or what START will run.
+ *
+ * @param {string|null} runningScript - Name of the running script, or null if none
+ */
+function renderScriptStatus(runningScript) {
+    const status = document.getElementById("scriptStatus");
+    if (!status) return;
+    const pretty = name => name.replace(/\.java$/, "");
+
+    status.classList.remove("running", "selected");
+    if (runningScript) {
+        status.textContent = `Running: ${pretty(runningScript)}`;
+        status.classList.add("running");
+    } else if (selectedScriptName) {
+        status.textContent = `Selected: ${pretty(selectedScriptName)}`;
+        status.classList.add("selected");
+    } else {
+        status.textContent = "No script selected";
+    }
+}
+
+/**
+ * Syncs selection and status with the backend: highlights the running script if there is one,
+ * otherwise restores the last selection.
+ */
+async function refreshScriptStatus() {
+    let current = { script: null, running: false };
+    try {
+        const res = await fetch("/api/current");
+        if (res.ok) current = await res.json();
+    } catch (err) {
+        console.error("Failed to fetch current script:", err);
+    }
+
+    if (current.running && current.script) {
+        // Screenshotter isn't in the list; don't clear the user's selection for it
+        const listed = document.querySelector(
+            `#script-list li[data-script="${CSS.escape(current.script)}"]`);
+        if (listed && current.script !== selectedScriptName) selectScript(current.script);
+        renderScriptStatus(current.script);
+        return;
+    }
+
+    if (!selectedScriptName) {
+        let stored = null;
+        try {
+            stored = localStorage.getItem(SELECTED_SCRIPT_KEY);
+        } catch (e) {
+            // Ignore unavailable storage
+        }
+        if (stored) selectScript(stored);
+    }
+    renderScriptStatus(null);
 }
 
 // ----------------- WINDOW MODE -----------------
@@ -379,6 +458,7 @@ function connectStateWebSocket() {
 
             if (isStarted !== wasStarted) {
                 updateStartButtonUI();
+                refreshScriptStatus();
             }
             // Always ensure controls match state
             updateControlsState(isStarted);

@@ -17,6 +17,7 @@ public class ScriptInstance {
   private final BaseScript instance;
   private volatile Thread thread;
   private final WebSocketStateHandler stateHandler;
+  private final String scriptName;
 
   /**
    * Constructs a ScriptInstance by dynamically loading the script class specified in the config.
@@ -37,11 +38,31 @@ public class ScriptInstance {
     this.stateHandler = stateHandler;
 
     String fileName = config.script();
+    this.scriptName = fileName;
     String className = fileName.replace(".java", "").replace("/", ".");
 
     Class<?> script = Class.forName("com.chromascape.scripts." + className);
     Constructor<?> constructor = script.getDeclaredConstructor();
     instance = (BaseScript) constructor.newInstance();
+  }
+
+  /**
+   * Returns the script this instance runs, as listed by {@code /api/scripts}.
+   *
+   * @return The script file name, e.g. {@code "DemoMiningScript.java"}
+   */
+  public String getScriptName() {
+    return scriptName;
+  }
+
+  /**
+   * Returns whether the script's thread is still running.
+   *
+   * @return {@code true} while the script runs
+   */
+  public boolean isRunning() {
+    Thread t = thread;
+    return t != null && t.isAlive();
   }
 
   /**

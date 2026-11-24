@@ -1,11 +1,14 @@
 package com.chromascape.web.instance;
 
 import java.lang.reflect.InvocationTargetException;
+import java.util.HashMap;
+import java.util.Map;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -89,7 +92,25 @@ public class ScriptControl {
   @PostMapping(path = "/stop", consumes = MediaType.APPLICATION_JSON_VALUE)
   public ResponseEntity<Object> stopScript() {
     logger.info("Received stop request");
-    ScriptInstanceManager.getInstance().getInstanceRef().stop();
+    ScriptInstance current = ScriptInstanceManager.getInstance().getInstanceRef();
+    if (current != null) {
+      current.stop();
+    }
     return ResponseEntity.ok().build();
+  }
+
+  /**
+   * Reports the most recently started script and whether it is still running, so the UI can show
+   * what is selected or playing after a page reload.
+   *
+   * @return JSON {@code {"script": name-or-null, "running": boolean}}
+   */
+  @GetMapping(path = "/current", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Map<String, Object> currentScript() {
+    ScriptInstance current = ScriptInstanceManager.getInstance().getInstanceRef();
+    Map<String, Object> body = new HashMap<>();
+    body.put("script", current == null ? null : current.getScriptName());
+    body.put("running", current != null && current.isRunning());
+    return body;
   }
 }

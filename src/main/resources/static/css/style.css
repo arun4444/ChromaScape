@@ -173,6 +173,26 @@ h5 i {
   /* Keep text dark/readable */
   font-weight: 700;
   box-shadow: 0 4px 15px rgba(79, 172, 254, 0.2);
+  border-left: 4px solid rgb(79, 172, 254);
+}
+
+/* What START will run, or what is running */
+.script-status {
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.35);
+  word-break: break-word;
+}
+
+.script-status.selected {
+  color: #0b5394;
+  background: rgba(79, 172, 254, 0.18);
+}
+
+.script-status.running {
+  color: #1e6b34;
+  background: rgba(40, 167, 69, 0.2);
 }
 
 /* Viewport & Console */
